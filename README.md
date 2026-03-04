@@ -95,7 +95,7 @@ self-healing-router/
 ├── tests/
 │   └── run_evaluation.py  # Full benchmark runner
 ├── demo/
-│   ├── interactive.py     # Interactive CLI demo
+│   └── interactive.py     # Interactive CLI demo
 ├── index.html             # GitHub Pages interactive demo
 ├── COMPARISON.md           # SDK comparison (OpenAI, Claude, LangGraph, SHR)
 └── README.md
@@ -133,7 +133,7 @@ See **[COMPARISON.md](COMPARISON.md)** for the same refund scenario implemented 
 ## Citation
 
 ```bibtex
-@article{bholani2026selfhealing,
+@article{selfhealingrouter_llmagents_2026,
   title={Graph-Based Self-Healing Tool Routing for Cost-Efficient LLM Agents},
   author={Bholani, Neeraj},
   journal={arXiv preprint arXiv:2603.01548},
