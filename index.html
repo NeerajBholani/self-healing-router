@@ -354,7 +354,7 @@ function App() {
 
         <div style={{display:"flex",gap:14,flexDirection:isMobile?"column":"row"}}>
           <div style={{flex:1,minWidth:0}}>
-            <div style={{background:"#0e0f16",borderRadius:12,border:"1px solid #1a1c28",padding:"10px 14px 6px",marginBottom:14}}>
+            <div style={{background:"#0e0f16",borderRadius:12,border:"1px solid #1a1c28",padding:isMobile?"6px 8px 2px":"10px 14px 6px",marginBottom:14}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:isMobile?"flex-start":"center",marginBottom:4,padding:"0 2px",flexDirection:isMobile?"column":"row",gap:isMobile?4:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
                   <span style={{fontSize:isMobile?11:12,fontWeight:600,color:"#8a8d98"}}>{sc.name}</span>
@@ -372,6 +372,9 @@ function App() {
                     : <span style={{color:"#34d399",fontSize:9.5,fontWeight:600}}>ROUTED</span>}
                 </div>
               </div>
+              {isMobile && <div style={{fontSize:9,color:"#2a2d3a",textAlign:"center",padding:"2px 0 4px",fontFamily:"'DM Mono', monospace"}}>← swipe to explore graph →</div>}
+              <div style={{overflowX:isMobile?"auto":"visible",WebkitOverflowScrolling:"touch"}}>
+                <div style={{minWidth:isMobile?600:"auto"}}>
 
               <svg viewBox="0 0 880 440" style={{width:"100%",height:"auto",display:"block"}}>
                 <defs>
@@ -440,6 +443,8 @@ function App() {
                   </text>
                 )}
               </svg>
+                </div>
+              </div>
             </div>
 
             <div style={{background:"#0e0f16",borderRadius:12,border:"1px solid #1a1c28",padding:15,minHeight:180}}>
