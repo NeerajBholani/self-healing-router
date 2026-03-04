@@ -42,7 +42,7 @@ Parallel Health       Orchestrator        Tool Graph
 ## Quick Start
 
 ```bash
-git clone https://github.com/neerajbholani/self-healing-router.git
+git clone https://github.com/NeerajBholani/self-healing-router.git
 cd self-healing-router
 
 # Run the full benchmark (reproduces paper results)
@@ -56,7 +56,7 @@ python -m demo.interactive
 
 ## Web Demo
 
-**[Try it live in your browser](https://neerajbholani.github.io/self-healing-router/)** — break tools, watch Dijkstra reroute, and compare against LangGraph's static fallbacks on compound failure scenarios.
+**[Try it live in your browser](https://NeerajBholani.github.io/self-healing-router/)** — break tools, watch Dijkstra reroute, and compare against LangGraph's static fallbacks on compound failure scenarios.
 
 ## CLI Demo
 
