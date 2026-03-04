@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Self-Healing Router — Interactive Demo</title>
+  <meta name="description" content="Break tools and watch Dijkstra reroute in real-time. Compare Self-Healing Router vs LangGraph on compound failures. arXiv:2603.01548">
+  <style>body{margin:0;background:#08080d;}</style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useCallback, useMemo, useEffect, useRef } = React;
+
+function dijkstra(nodes, edges, start, goal, failedNodes) {
+  const INF = Infinity;
+  const dist = {}, prev = {};
+  nodes.forEach((n) => { dist[n.id] = INF; prev[n.id] = null; });
+  dist[start] = 0;
+  const adj = {};
+  nodes.forEach((n) => (adj[n.id] = []));
+  edges.forEach((e) => adj[e.source] && adj[e.source].push(e));
+  const visited = new Set();
+  const heap = [[0, start]];
+  while (heap.length > 0) {
+    heap.sort((a, b) => a[0] - b[0]);
+    const [d, u] = heap.shift();
+    if (visited.has(u)) continue;
+    visited.add(u);
+    if (u === goal) break;
+    for (const edge of adj[u] || []) {
+      const v = edge.target;
+      if (visited.has(v)) continue;
+      const w = failedNodes.has(edge.source) || failedNodes.has(edge.target) ? INF : edge.cost;
+      const nd = dist[u] + w;
+      if (nd < dist[v]) { dist[v] = nd; prev[v] = u; heap.push([nd, v]); }
+    }
+  }
+  if (dist[goal] === INF) return null;
+  const path = [];
+  let cur = goal;
+  while (cur) { path.unshift(cur); cur = prev[cur]; }
+  return { path, cost: dist[goal] };
+}
+
+function langGraphRoute(scenarioKey, failedNodes) {
+  const fallbacks = {
+    customer_support: { Stripe: "Razorpay", Razorpay: "Stripe", Email: "SMS", SMS: "Email" },
+    travel_booking: { FlightAPI: "TrainAPI", TrainAPI: "FlightAPI", HotelAPI: "HostelAPI", HostelAPI: "HotelAPI", CarAPI: "BusAPI", BusAPI: "CarAPI" },
+    content_moderation: { TextMod: "ImageMod", ImageMod: "TextMod", VideoMod: "ImageMod", AutoApprove: "HumanReview", HumanReview: "AutoApprove" },
+  };
+  const fb = fallbacks[scenarioKey] || {};
+  const silentFailures = [], handledFallbacks = [], stuck = [];
+  for (const nodeId of failedNodes) {
+    const fallback = fb[nodeId];
+    if (fallback && !failedNodes.has(fallback)) handledFallbacks.push({ failed: nodeId, fallback });
+    else if (fallback && failedNodes.has(fallback)) silentFailures.push({ failed: nodeId, fallbackAlsoDown: fallback });
+    else stuck.push(nodeId);
+  }
+  return { silentFailures, handledFallbacks, stuck };
+}
+
+const SCENARIOS = {
+  customer_support: {
+    key: "customer_support", name: "Customer Support", subtitle: "Refund Pipeline",
+    nodes: [
+      { id: "Start", x: 80, y: 220, type: "entry" }, { id: "CRM", x: 240, y: 220, type: "tool" },
+      { id: "Stripe", x: 420, y: 130, type: "tool" }, { id: "Razorpay", x: 420, y: 310, type: "tool" },
+      { id: "Email", x: 600, y: 130, type: "tool" }, { id: "SMS", x: 600, y: 310, type: "tool" },
+      { id: "Complete", x: 760, y: 220, type: "goal" },
+    ],
+    edges: [
+      { source: "Start", target: "CRM", cost: 0.1 }, { source: "CRM", target: "Stripe", cost: 0.3 },
+      { source: "CRM", target: "Razorpay", cost: 0.5 }, { source: "Stripe", target: "Email", cost: 0.3 },
+      { source: "Stripe", target: "SMS", cost: 0.4 }, { source: "Razorpay", target: "Email", cost: 0.3 },
+      { source: "Razorpay", target: "SMS", cost: 0.4 }, { source: "Email", target: "Complete", cost: 0.1 },
+      { source: "SMS", target: "Complete", cost: 0.1 },
+    ],
+    presets: [
+      { label: "Single failure", tools: ["Stripe"], desc: "Both systems handle this" },
+      { label: "Cross-layer compound", tools: ["Stripe", "Email"], desc: "SHR reroutes through Razorpay+SMS" },
+      { label: "Same-layer compound", tools: ["Stripe", "Razorpay"], desc: "All payment down — LangGraph silent fail" },
+      { label: "Triple failure", tools: ["Stripe", "Email", "Razorpay"], desc: "No payment path — SHR escalates to LLM" },
+    ],
+  },
+  travel_booking: {
+    key: "travel_booking", name: "Travel Booking", subtitle: "Multi-leg Reservation",
+    nodes: [
+      { id: "Start", x: 60, y: 220, type: "entry" }, { id: "FlightAPI", x: 200, y: 120, type: "tool" },
+      { id: "TrainAPI", x: 200, y: 320, type: "tool" }, { id: "HotelAPI", x: 380, y: 120, type: "tool" },
+      { id: "HostelAPI", x: 380, y: 320, type: "tool" }, { id: "CarAPI", x: 540, y: 120, type: "tool" },
+      { id: "BusAPI", x: 540, y: 320, type: "tool" }, { id: "Payment", x: 690, y: 220, type: "tool" },
+      { id: "Confirm", x: 810, y: 220, type: "goal" },
+    ],
+    edges: [
+      { source: "Start", target: "FlightAPI", cost: 0.3 }, { source: "Start", target: "TrainAPI", cost: 0.5 },
+      { source: "FlightAPI", target: "HotelAPI", cost: 0.3 }, { source: "FlightAPI", target: "HostelAPI", cost: 0.4 },
+      { source: "TrainAPI", target: "HotelAPI", cost: 0.3 }, { source: "TrainAPI", target: "HostelAPI", cost: 0.4 },
+      { source: "HotelAPI", target: "CarAPI", cost: 0.3 }, { source: "HotelAPI", target: "BusAPI", cost: 0.4 },
+      { source: "HostelAPI", target: "CarAPI", cost: 0.4 }, { source: "HostelAPI", target: "BusAPI", cost: 0.3 },
+      { source: "CarAPI", target: "Payment", cost: 0.2 }, { source: "BusAPI", target: "Payment", cost: 0.2 },
+      { source: "Payment", target: "Confirm", cost: 0.1 },
+    ],
+    presets: [
+      { label: "Single failure", tools: ["FlightAPI"], desc: "Both systems reroute to TrainAPI" },
+      { label: "All transport down", tools: ["FlightAPI", "TrainAPI"], desc: "LangGraph silent fail — SHR escalates" },
+      { label: "Triple compound", tools: ["FlightAPI", "HotelAPI", "CarAPI"], desc: "SHR finds Train->Hostel->Bus" },
+    ],
+  },
+  content_moderation: {
+    key: "content_moderation", name: "Content Moderation", subtitle: "Review Pipeline",
+    nodes: [
+      { id: "Start", x: 80, y: 220, type: "entry" }, { id: "TextMod", x: 260, y: 100, type: "tool" },
+      { id: "ImageMod", x: 260, y: 220, type: "tool" }, { id: "VideoMod", x: 260, y: 340, type: "tool" },
+      { id: "ToxicityScorer", x: 480, y: 220, type: "tool" }, { id: "HumanReview", x: 660, y: 150, type: "tool" },
+      { id: "AutoApprove", x: 660, y: 290, type: "tool" }, { id: "Complete", x: 810, y: 220, type: "goal" },
+    ],
+    edges: [
+      { source: "Start", target: "TextMod", cost: 0.2 }, { source: "Start", target: "ImageMod", cost: 0.3 },
+      { source: "Start", target: "VideoMod", cost: 0.5 }, { source: "TextMod", target: "ToxicityScorer", cost: 0.2 },
+      { source: "ImageMod", target: "ToxicityScorer", cost: 0.3 }, { source: "VideoMod", target: "ToxicityScorer", cost: 0.4 },
+      { source: "ToxicityScorer", target: "HumanReview", cost: 0.5 }, { source: "ToxicityScorer", target: "AutoApprove", cost: 0.2 },
+      { source: "HumanReview", target: "Complete", cost: 0.1 }, { source: "AutoApprove", target: "Complete", cost: 0.1 },
+    ],
+    presets: [
+      { label: "Single failure", tools: ["TextMod"], desc: "Both reroute to ImageMod" },
+      { label: "Both review paths", tools: ["AutoApprove", "HumanReview"], desc: "LangGraph silent fail — SHR escalates" },
+      { label: "All moderators", tools: ["TextMod", "ImageMod", "VideoMod"], desc: "No moderation path — SHR escalates" },
+    ],
+  },
+};
+
+function ComparisonPanel({ scenario, failedNodes }) {
+  const sc = SCENARIOS[scenario];
+  const shrResult = dijkstra(sc.nodes, sc.edges, sc.nodes[0].id, sc.nodes[sc.nodes.length - 1].id, failedNodes);
+  const lgResult = langGraphRoute(sc.key, failedNodes);
+  const lgHasSilent = lgResult.silentFailures.length > 0;
+  const isCompound = failedNodes.size >= 2;
+  const toolCount = sc.nodes.filter(n => n.type === "tool").length;
+  const combos = Math.pow(2, toolCount);
+
+  if (failedNodes.size === 0) return React.createElement("div", {style:{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"20px 0",gap:8}},
+    React.createElement("div", {style:{color:"#2a2a38",fontSize:10.5,fontFamily:"'JetBrains Mono', monospace"}}, "Click tools or pick a preset to see the difference"),
+    React.createElement("div", {style:{color:"#1a1a28",fontSize:9,fontFamily:"'JetBrains Mono', monospace"}}, toolCount + " tools = " + combos + " failure combinations. LangGraph codes ~" + Math.min(toolCount*2,12) + " fallback edges.")
+  );
+
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:10,fontFamily:"'JetBrains Mono', monospace"}}>
+        <span style={{color:"#555"}}>Failed: <span style={{color:"#ef4444"}}>{[...failedNodes].join(", ")}</span></span>
+        {isCompound && <span style={{color:"#f59e0b",fontWeight:700,fontSize:9,background:"#f59e0b15",padding:"2px 8px",borderRadius:10}}>COMPOUND FAILURE</span>}
+      </div>
+      <div style={{background:"#081a10",border:"1px solid #10b98128",borderRadius:8,padding:11}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+          <span style={{fontSize:11,fontWeight:700,color:"#10b981"}}>Self-Healing Router</span>
+          <span style={{fontSize:8.5,fontWeight:700,padding:"2px 8px",borderRadius:10,background:shrResult?"#10b98118":"#f59e0b18",color:shrResult?"#10b981":"#f59e0b"}}>
+            {shrResult ? "REROUTED" : "ESCALATED TO LLM"}
+          </span>
+        </div>
+        <div style={{fontSize:10,color:"#10b981aa",fontFamily:"'JetBrains Mono', monospace",lineHeight:1.5}}>
+          {shrResult ? <>{shrResult.path.join(" → ")} <span style={{color:"#444"}}>({shrResult.cost.toFixed(2)})</span></> : <>No path exists. LLM invoked for goal demotion. <span style={{color:"#10b981"}}>Explicitly logged.</span></>}
+        </div>
+        <div style={{marginTop:4,fontSize:9,color:"#333"}}>Silent failures: <span style={{color:"#10b981",fontWeight:700}}>0</span> (always, by construction)</div>
+      </div>
+      <div style={{background:lgHasSilent?"#180808":"#0c0c14",border:"1px solid "+(lgHasSilent?"#ef444435":"#222"),borderRadius:8,padding:11}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+          <span style={{fontSize:11,fontWeight:700,color:"#777"}}>LangGraph <span style={{fontWeight:400,color:"#444",fontSize:10}}>(static fallbacks)</span></span>
+          <span style={{fontSize:8.5,fontWeight:700,padding:"2px 8px",borderRadius:10,background:lgHasSilent?"#ef444418":lgResult.stuck.length>0?"#f59e0b18":"#10b98118",color:lgHasSilent?"#ef4444":lgResult.stuck.length>0?"#f59e0b":"#10b981"}}>
+            {lgHasSilent ? "SILENT FAILURE" : lgResult.stuck.length > 0 ? "NO FALLBACK" : "HANDLED"}
+          </span>
+        </div>
+        <div style={{fontSize:10,fontFamily:"'JetBrains Mono', monospace",lineHeight:1.7}}>
+          {lgResult.handledFallbacks.map((h,i) => <div key={"h"+i} style={{color:"#777"}}>{h.failed} down → fallback to {h.fallback} <span style={{color:"#10b981"}}>OK</span></div>)}
+          {lgResult.silentFailures.map((sf,i) => <div key={"s"+i} style={{color:"#ef4444"}}>{sf.failed} down + {sf.fallbackAlsoDown} down → <span style={{fontWeight:700}}>no edge coded → skipped silently</span></div>)}
+          {lgResult.stuck.map((s,i) => <div key={"k"+i} style={{color:"#f59e0b"}}>{s} down → <span style={{fontWeight:700}}>no fallback defined</span></div>)}
+          {lgResult.handledFallbacks.length===0 && lgResult.silentFailures.length===0 && lgResult.stuck.length===0 && <div style={{color:"#444"}}>No failures to handle</div>}
+        </div>
+        {lgHasSilent && <div style={{marginTop:7,fontSize:9,padding:"5px 8px",background:"#ef444410",borderRadius:4,color:"#ef4444cc",lineHeight:1.5}}>
+          {lgResult.silentFailures.length} silent failure{lgResult.silentFailures.length>1?"s":""}. State machine continues without this step. No error raised. The customer thinks the operation completed.
+        </div>}
+      </div>
+      {isCompound && lgHasSilent && <div style={{fontSize:9.5,color:"#f59e0bcc",fontFamily:"'JetBrains Mono', monospace",textAlign:"center",padding:"7px 10px",background:"#f59e0b08",borderRadius:6,lineHeight:1.5,border:"1px solid #f59e0b15"}}>
+        This is the gap. LangGraph pre-codes ~{Math.min(toolCount*2,12)} single-failure edges. Dijkstra covers all {combos} combinations with one algorithm call.
+      </div>}
+    </div>
+  );
+}
+
+function LogEntry({ entry, index }) {
+  const colorMap = { reroute: "#f59e0b", escalate: "#ef4444", restore: "#10b981", reset: "#555" };
+  return (
+    <div style={{display:"flex",gap:6,alignItems:"flex-start",padding:"4px 0",borderBottom:"1px solid #ffffff06",fontFamily:"'JetBrains Mono', monospace",fontSize:10}}>
+      <span style={{color:"#2a2a38",minWidth:16,textAlign:"right"}}>{String(index+1).padStart(2,"0")}</span>
+      <span style={{background:colorMap[entry.type]+"1a",color:colorMap[entry.type],padding:"1px 5px",borderRadius:3,fontSize:8.5,fontWeight:700,letterSpacing:0.4,minWidth:56,textAlign:"center"}}>{entry.type.toUpperCase()}</span>
+      <span style={{color:"#777",flex:1}}>{entry.message}</span>
+    </div>
+  );
+}
+
+function App() {
+  const [scenario, setScenario] = useState("customer_support");
+  const [failedNodes, setFailedNodes] = useState(new Set());
+  const [log, setLog] = useState([]);
+  const [pulseNode, setPulseNode] = useState(null);
+  const logRef = useRef(null);
+
+  const sc = SCENARIOS[scenario];
+  const result = useMemo(() => dijkstra(sc.nodes, sc.edges, sc.nodes[0].id, sc.nodes[sc.nodes.length-1].id, failedNodes), [sc, failedNodes]);
+  const pathSet = useMemo(() => new Set(result ? result.path : []), [result]);
+  const pathEdges = useMemo(() => {
+    if (!result) return new Set();
+    const s = new Set();
+    for (let i=0; i<result.path.length-1; i++) s.add(result.path[i]+"->"+result.path[i+1]);
+    return s;
+  }, [result]);
+
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [log]);
+  useEffect(() => {
+    if (!result) { setPulseNode(null); return; }
+    let i = 0;
+    const iv = setInterval(() => { if (i<result.path.length) { setPulseNode(result.path[i]); i++; } else { setPulseNode(null); clearInterval(iv); } }, 250);
+    return () => { clearInterval(iv); setPulseNode(null); };
+  }, [result ? result.path.join(",") : ""]);
+
+  const toggleNode = useCallback((nodeId) => {
+    const node = sc.nodes.find((n) => n.id === nodeId);
+    if (node.type !== "tool") return;
+    setFailedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) { next.delete(nodeId); setLog((l) => [...l, {type:"restore",message:nodeId+" restored"}]); }
+      else {
+        next.add(nodeId);
+        const r = dijkstra(sc.nodes, sc.edges, sc.nodes[0].id, sc.nodes[sc.nodes.length-1].id, next);
+        setLog((l) => [...l, r ? {type:"reroute",message:nodeId+" failed → "+r.path.join(" → ")+" ("+r.cost.toFixed(2)+")"} : {type:"escalate",message:nodeId+" failed → NO PATH → LLM escalation"}]);
+      }
+      return next;
+    });
+  }, [sc]);
+
+  const runPreset = useCallback((tools) => {
+    const next = new Set();
+    const newLogs = [];
+    tools.forEach((t) => {
+      next.add(t);
+      const r = dijkstra(sc.nodes, sc.edges, sc.nodes[0].id, sc.nodes[sc.nodes.length-1].id, next);
+      newLogs.push(r ? {type:"reroute",message:t+" failed → "+r.path.join(" → ")+" ("+r.cost.toFixed(2)+")"} : {type:"escalate",message:t+" failed → NO PATH → LLM escalation"});
+    });
+    setFailedNodes(next);
+    setLog((l) => [...l, ...newLogs]);
+  }, [sc]);
+
+  const resetAll = useCallback(() => { setFailedNodes(new Set()); setLog((l) => [...l, {type:"reset",message:"All tools restored"}]); }, []);
+  const switchScenario = useCallback((key) => { setScenario(key); setFailedNodes(new Set()); setLog([]); }, []);
+  const toolNodes = sc.nodes.filter((n) => n.type === "tool");
+
+  return (
+    <div style={{background:"#08080d",minHeight:"100vh",color:"#e0e0e0",fontFamily:"'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif"}}>
+      <style dangerouslySetInnerHTML={{__html: `
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+        @keyframes flowDash { to { stroke-dashoffset:-20; } }
+        @keyframes pulseGlow { 0%,100% { filter:drop-shadow(0 0 4px rgba(16,185,129,0.3)); } 50% { filter:drop-shadow(0 0 14px rgba(16,185,129,0.7)); } }
+        @keyframes escalatePulse { 0%,100% { opacity:0.4; } 50% { opacity:1; } }
+        * { box-sizing:border-box; }
+        ::-webkit-scrollbar { width: 3px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: #1a1a28; border-radius: 2px; }
+      `}} />
+
+      <div style={{maxWidth:980,margin:"0 auto",padding:"20px 24px"}}>
+        <div style={{display:"flex",alignItems:"baseline",gap:10,marginBottom:1}}>
+          <h1 style={{margin:0,fontSize:19,fontWeight:700,color:"#fff",letterSpacing:-0.5}}>Self-Healing Router</h1>
+          <a href="https://arxiv.org/abs/2603.01548" target="_blank" rel="noopener" style={{fontSize:10,color:"#333",fontFamily:"'JetBrains Mono', monospace",textDecoration:"none",borderBottom:"1px solid #222"}}>arXiv:2603.01548</a>
+        </div>
+        <p style={{margin:"2px 0 12px",fontSize:12,color:"#444",lineHeight:1.4}}>
+          Click tools to toggle failures, or use presets below to see compound failure scenarios. The comparison panel shows what happens in each system.
+        </p>
+
+        <div style={{display:"flex",gap:4,marginBottom:10}}>
+          {Object.entries(SCENARIOS).map(([key, val]) =>
+            <button key={key} onClick={() => switchScenario(key)} style={{background:scenario===key?"#12121e":"transparent",border:scenario===key?"1px solid #2a2a3e":"1px solid transparent",color:scenario===key?"#ddd":"#444",padding:"5px 11px",borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:scenario===key?600:400,fontFamily:"inherit",transition:"all 0.15s"}}>{val.name}</button>
+          )}
+          <div style={{flex:1}} />
+          <button onClick={resetAll} style={{background:"transparent",border:"1px solid #1a1a28",color:"#444",padding:"5px 11px",borderRadius:5,cursor:"pointer",fontSize:10.5,fontFamily:"inherit"}}>Reset All</button>
+        </div>
+
+        <div style={{display:"flex",gap:5,marginBottom:14,flexWrap:"wrap"}}>
+          {sc.presets.map((p, i) => {
+            const lgR = langGraphRoute(sc.key, new Set(p.tools));
+            const hasSilent = lgR.silentFailures.length > 0;
+            const isActive = p.tools.length === failedNodes.size && p.tools.every(t => failedNodes.has(t));
+            return <button key={i} onClick={() => runPreset(p.tools)} title={p.desc} style={{
+              background:isActive?(hasSilent?"#1a0a0a":"#081a10"):"#0c0c14",
+              border:"1px solid "+(isActive?(hasSilent?"#ef444444":"#10b98133"):"#1a1a28"),
+              color:hasSilent?"#f59e0b":"#888",
+              padding:"5px 10px",borderRadius:5,cursor:"pointer",fontSize:10,fontFamily:"'JetBrains Mono', monospace",
+              fontWeight:hasSilent?600:400,transition:"all 0.15s",display:"flex",alignItems:"center",gap:5,
+            }}>
+              {hasSilent && <span style={{width:6,height:6,borderRadius:"50%",background:"#f59e0b",display:"inline-block"}} />}
+              {p.label}
+              <span style={{color:"#333",fontSize:9}}>({p.tools.length})</span>
+            </button>;
+          })}
+        </div>
+
+        <div style={{background:"#0b0b14",borderRadius:10,border:"1px solid #161622",padding:"8px 12px",marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4,padding:"2px 4px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:11.5,fontWeight:600,color:"#bbb"}}>{sc.name}</span>
+              <span style={{fontSize:10,color:"#333"}}>{sc.subtitle}</span>
+            </div>
+            <div style={{display:"flex",gap:16,fontSize:10,fontFamily:"'JetBrains Mono', monospace"}}>
+              <span style={{color:"#333"}}>TOOLS <span style={{color:failedNodes.size>0?"#f59e0b":"#10b981"}}>{toolNodes.length-failedNodes.size}/{toolNodes.length}</span></span>
+              <span style={{color:"#333"}}>COST <span style={{color:result?"#10b981":"#ef4444"}}>{result?result.cost.toFixed(2):"---"}</span></span>
+              <span style={{color:"#333"}}>{result?<span style={{color:"#10b981"}}>ROUTED</span>:failedNodes.size>0?<span style={{color:"#ef4444"}}>ESCALATE</span>:<span style={{color:"#10b981"}}>ROUTED</span>}</span>
+            </div>
+          </div>
+
+          <svg viewBox="0 0 880 440" style={{width:"100%",height:"auto"}}>
+            <defs>
+              <marker id="mA" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="7" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 4L0 8z" fill="#10b981" /></marker>
+              <marker id="mD" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="7" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 4L0 8z" fill="#161622" /></marker>
+              <marker id="mX" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="7" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 4L0 8z" fill="#ef444440" /></marker>
+              <filter id="fG"><feGaussianBlur stdDeviation="3" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+              <filter id="fR"><feGaussianBlur stdDeviation="2" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
+            </defs>
+
+            {sc.edges.map((edge, i) => {
+              const src = sc.nodes.find((n) => n.id === edge.source);
+              const tgt = sc.nodes.find((n) => n.id === edge.target);
+              const isOn = pathEdges.has(edge.source+"->"+edge.target);
+              const isDead = failedNodes.has(edge.source) || failedNodes.has(edge.target);
+              const dy = tgt.y - src.y;
+              return <g key={i}>
+                <line x1={src.x} y1={src.y} x2={tgt.x} y2={tgt.y}
+                  stroke={isDead?"#ef444420":isOn?"#10b981":"#12121e"}
+                  strokeWidth={isOn?2.5:0.8}
+                  markerEnd={isDead?"url(#mX)":isOn?"url(#mA)":"url(#mD)"}
+                  style={isOn?{filter:"url(#fG)"}:{}} />
+                {isOn && <line x1={src.x} y1={src.y} x2={tgt.x} y2={tgt.y} stroke="#10b981" strokeWidth={2} strokeDasharray="5 14" style={{animation:"flowDash 0.7s linear infinite"}} />}
+                <text
+                  x={(src.x+tgt.x)/2+(Math.abs(dy)>10?-14:0)}
+                  y={(src.y+tgt.y)/2+(Math.abs(dy)<10?-10:3)}
+                  fill={isDead?"#ef444428":isOn?"#10b98166":"#181828"} fontSize={8} fontFamily="'JetBrains Mono', monospace" textAnchor="middle">
+                  {isDead ? "INF" : edge.cost.toFixed(1)}
+                </text>
+              </g>;
+            })}
+
+            {sc.nodes.map((node) => {
+              const isFailed = failedNodes.has(node.id);
+              const isOn = pathSet.has(node.id);
+              const isPulse = pulseNode === node.id;
+              const isClick = node.type === "tool";
+              const isTerm = node.type === "entry" || node.type === "goal";
+              let fill = "#0d0d16", stroke = "#1e1e2e", tc = "#555";
+              if (isFailed) { fill = "#160808"; stroke = "#ef4444"; tc = "#ef4444"; }
+              else if (isOn) { fill = "#081810"; stroke = "#10b981"; tc = "#10b981"; }
+              if (isTerm) { tc = isOn ? "#10b981" : "#777"; stroke = isOn ? "#10b981" : "#2a2a3e"; }
+              const r = isTerm ? 26 : 24;
+              return <g key={node.id} onClick={() => isClick && toggleNode(node.id)} style={{cursor:isClick?"pointer":"default"}}>
+                {isOn && !isFailed && <circle cx={node.x} cy={node.y} r={r+7} fill="none" stroke="#10b98120" strokeWidth={1} style={isPulse?{animation:"pulseGlow 0.4s ease-in-out"}:{}} />}
+                {isFailed && <circle cx={node.x} cy={node.y} r={r+5} fill="none" stroke="#ef444415" strokeWidth={1} />}
+                <circle cx={node.x} cy={node.y} r={r} fill={fill} stroke={stroke} strokeWidth={isFailed||isOn?1.5:0.7} style={isFailed?{filter:"url(#fR)"}:isOn?{filter:"url(#fG)"}:{}} />
+                {!isFailed
+                  ? <text x={node.x} y={node.y+1} textAnchor="middle" dominantBaseline="middle" fill={tc} fontSize={node.id.length>11?7:node.id.length>7?8.5:10} fontWeight={isOn?600:400} fontFamily="'IBM Plex Sans', sans-serif">{node.id}</text>
+                  : <text x={node.x} y={node.y+1} textAnchor="middle" dominantBaseline="middle" fill="#ef4444" fontSize={17} fontWeight={700}>✕</text>
+                }
+              </g>;
+            })}
+            {!result && failedNodes.size > 0 && <text x={440} y={415} textAnchor="middle" fill="#ef4444" fontSize={11} fontWeight={600} fontFamily="'JetBrains Mono', monospace" style={{animation:"escalatePulse 1.5s ease-in-out infinite"}}>NO PATH — LLM ESCALATION REQUIRED</text>}
+          </svg>
+        </div>
+
+        <div style={{display:"flex",gap:12}}>
+          <div style={{flex:1,background:"#0b0b14",borderRadius:10,border:"1px solid #161622",padding:13,minHeight:180}}>
+            <div style={{fontSize:10,fontWeight:600,color:"#333",letterSpacing:0.8,textTransform:"uppercase",marginBottom:8}}>Self-Healing Router vs LangGraph</div>
+            <ComparisonPanel scenario={scenario} failedNodes={failedNodes} />
+          </div>
+          <div style={{width:300,background:"#0b0b14",borderRadius:10,border:"1px solid #161622",padding:13,display:"flex",flexDirection:"column",maxHeight:340}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+              <span style={{fontSize:10,fontWeight:600,color:"#333",letterSpacing:0.8,textTransform:"uppercase"}}>Decision Log</span>
+              <div style={{display:"flex",gap:8,fontSize:9,fontFamily:"'JetBrains Mono', monospace"}}>
+                <span style={{color:"#f59e0b"}}>{log.filter(l=>l.type==="reroute").length}R</span>
+                <span style={{color:"#ef4444"}}>{log.filter(l=>l.type==="escalate").length}E</span>
+                <span style={{color:"#10b981"}}>0S</span>
+              </div>
+            </div>
+            <div ref={logRef} style={{flex:1,overflowY:"auto"}}>
+              {log.length===0
+                ? <div style={{color:"#1a1a28",fontSize:10,fontFamily:"'JetBrains Mono', monospace",padding:"28px 0",textAlign:"center"}}>Awaiting failures...</div>
+                : log.map((e,i) => <LogEntry key={i} entry={e} index={i} />)}
+            </div>
+            <div style={{marginTop:8,padding:"6px 8px",background:"#10b98108",border:"1px solid #10b98112",borderRadius:5,fontSize:9,color:"#10b98166",fontFamily:"'JetBrains Mono', monospace",textAlign:"center"}}>
+              R = reroute, E = escalation, S = silent failure (always 0)
+            </div>
+          </div>
+        </div>
+
+        <div style={{textAlign:"center",marginTop:16,fontSize:10,color:"#2a2a38",fontFamily:"'JetBrains Mono', monospace"}}>
+          <a href="https://github.com/NeerajBholani/self-healing-router" target="_blank" rel="noopener" style={{color:"#333",textDecoration:"none",borderBottom:"1px solid #1a1a28"}}>GitHub</a>
+          <span style={{margin:"0 8px"}}>·</span>
+          <a href="https://arxiv.org/abs/2603.01548" target="_blank" rel="noopener" style={{color:"#333",textDecoration:"none",borderBottom:"1px solid #1a1a28"}}>Paper</a>
+          <span style={{margin:"0 8px"}}>·</span>
+          <span>Neeraj Bholani, 2026</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

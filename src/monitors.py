@@ -122,6 +122,10 @@ class ToolHealthMonitor:
         self.tool_status[tool_name] = True
         self.failure_counts[tool_name] = 0
     
+    def get_failed_tools(self) -> list[str]:
+        """Return list of tools currently marked as down."""
+        return [name for name, healthy in self.tool_status.items() if not healthy]
+    
     def evaluate(self, request: dict) -> MonitorSignal:
         failed_tools = [name for name, healthy in self.tool_status.items() if not healthy]
         

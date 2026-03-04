@@ -249,7 +249,7 @@ result = orchestrator.execute_task(
 |---|---|---|---|
 | **OpenAI SDK** | 4 LLM calls, correct | 6 LLM calls, correct | 6 LLM calls, correct |
 | **Claude SDK** | 4 LLM calls, correct | 6 LLM calls, correct | 6 LLM calls, correct |
-| **LangGraph** | 0 LLM calls, correct | 0 LLM calls, **SILENT FAILURE** | 0 LLM calls, **SILENT FAILURE** |
+| **LangGraph** | 0 LLM calls, correct | 0 LLM calls, **SILENT FAILURE** | 0 LLM calls, correct |
 | **Self-Healing Router** | 0 LLM calls, correct | 1 LLM call, correct (escalated) | 0 LLM calls, correct (rerouted) |
 
-The key insight: OpenAI/Claude SDKs use the LLM for every routing decision. LangGraph removes the LLM but loses correctness on compound failures. Self-Healing Router removes the LLM from routing while preserving correctness — and escalates only when no alternative exists.
+The key insight: OpenAI/Claude SDKs use the LLM for every routing decision. LangGraph removes the LLM but loses correctness on compound failures where both a tool and its fallback are down. Self-Healing Router removes the LLM from routing while preserving correctness — and escalates only when no alternative exists.

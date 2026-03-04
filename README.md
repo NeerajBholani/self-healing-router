@@ -97,6 +97,8 @@ self-healing-router/
 ├── demo/
 │   ├── interactive.py     # Interactive CLI demo
 │   └── web_demo.jsx       # React web demo (compare SHR vs LangGraph)
+├── index.html             # GitHub Pages interactive demo
+├── COMPARISON.md           # SDK comparison (OpenAI, Claude, LangGraph, SHR)
 └── README.md
 ```
 

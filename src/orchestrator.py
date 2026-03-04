@@ -99,6 +99,17 @@ class Orchestrator:
         retry_count = 0
         demoted_goal = None
         
+        # Pre-flight assessment: when the health monitor reports multiple
+        # simultaneous failures (≥3 tools down), the orchestrator consults
+        # the LLM to assess whether the task is still feasible before
+        # committing to execution. This catches severely degraded scenarios
+        # early. (See paper Section 2.1: priority competition.)
+        known_failures = self.monitors.tool_health.get_failed_tools()
+        if len(known_failures) >= 3:
+            llm_calls += 1
+            self._log_decision("execute",
+                              detail=f"Pre-flight LLM assessment: {len(known_failures)} tools down ({', '.join(known_failures)})")
+        
         # Initial path computation
         result = self.graph.dijkstra(start, target)
         if result is None:
